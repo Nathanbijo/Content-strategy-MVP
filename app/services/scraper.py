@@ -1,117 +1,163 @@
-from typing import Optional
 import requests
 from bs4 import BeautifulSoup
-import logging
+from typing import Optional
+import time
+import os
+from openai import OpenAI
 
-logger = logging.getLogger(__name__)
+# Groq client for fallback generation
+groq_client = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
+)
 
+def generate_fallback_from_url(url: str) -> str:
+    """Use LLM to intelligently guess website content from URL when scraping fails"""
+    
+    try:
+        domain = url.split('/')[2].replace('www.', '')  # Extract clean domain
+    except:
+        domain = url
+    
+    prompt = f"""Based on the domain name '{domain}', generate a brief 2-3 sentence description of what this company/website likely does, their main products/services, and target audience.
 
-class WebScraper:
-    """Web scraper for extracting content from URLs."""
-
-    DEFAULT_USER_AGENT = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/91.0.4472.124 Safari/537.36"
-    )
-    DEFAULT_TIMEOUT = 10
-    MAX_CONTENT_LENGTH = 3000
-
-    @classmethod
-    def scrape_website(cls, url: str, fallback_text: Optional[str] = None) -> str:
-        """
-        Scrape website content from URL and extract text.
-
-        Extracts: title, meta description, headings (h1-h3), paragraphs, 
-        and navigation links.
-
-        Args:
-            url: Website URL to scrape
-            fallback_text: Text to return if scraping fails
-
-        Returns:
-            Extracted text content (max 3000 chars)
-        """
-        if fallback_text:
-            return fallback_text[:cls.MAX_CONTENT_LENGTH]
-
-        try:
-            # Fetch HTML with timeout and user agent
-            response = requests.get(
-                url,
-                headers={"User-Agent": cls.DEFAULT_USER_AGENT},
-                timeout=cls.DEFAULT_TIMEOUT,
-            )
-            response.raise_for_status()
-
-            soup = BeautifulSoup(response.content, "html.parser")
-            parts = []
-
-            # Extract title
-            if soup.title and soup.title.string:
-                parts.append(f"Title: {soup.title.string.strip()}")
-
-            # Extract meta description
-            meta_desc = soup.find("meta", attrs={"name": "description"})
-            if meta_desc and meta_desc.get("content"):
-                parts.append(f"Description: {meta_desc.get('content').strip()}")
-
-            # Extract h1 headings
-            for h1 in soup.find_all("h1", limit=3):
-                text = h1.get_text(strip=True)
-                if text:
-                    parts.append(f"H1: {text}")
-
-            # Extract h2 headings
-            for h2 in soup.find_all("h2", limit=5):
-                text = h2.get_text(strip=True)
-                if text:
-                    parts.append(f"H2: {text}")
-
-            # Extract h3 headings
-            for h3 in soup.find_all("h3", limit=5):
-                text = h3.get_text(strip=True)
-                if text:
-                    parts.append(f"H3: {text}")
-
-            # Extract main paragraphs
-            for p in soup.find_all("p", limit=10):
-                text = p.get_text(strip=True)
-                if text and len(text) > 20:  # Only meaningful paragraphs
-                    parts.append(text)
-
-            # Extract navigation links and their text
-            nav_sections = soup.find_all(["nav", "footer"], limit=2)
-            for nav in nav_sections:
-                for link in nav.find_all("a", limit=5):
-                    link_text = link.get_text(strip=True)
-                    if link_text:
-                        parts.append(f"Link: {link_text}")
-
-            # Combine all parts
-            full_text = "\n\n".join(parts)
-            
-            # Truncate to max length
-            if len(full_text) > cls.MAX_CONTENT_LENGTH:
-                full_text = full_text[: cls.MAX_CONTENT_LENGTH] + "..."
-
-            if not full_text.strip():
-                raise ValueError("No content extracted from website")
-
-            return full_text
-
-        except requests.RequestException as e:
-            logger.error(f"Failed to scrape {url}: {str(e)}")
-            if fallback_text:
-                return fallback_text[:cls.MAX_CONTENT_LENGTH]
-            raise ValueError(f"Could not fetch website at {url}: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error processing website content: {str(e)}")
-            if fallback_text:
-                return fallback_text[:cls.MAX_CONTENT_LENGTH]
-            raise ValueError(f"Error processing website content: {str(e)}")
+Be specific and realistic. Output plain text only, no formatting."""
+    
+    try:
+        print(f"🤖 Generating AI fallback for {domain}...")
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=150
+        )
+        generated = response.choices[0].message.content.strip()
+        print(f"✓ Generated fallback: {generated[:100]}...")
+        return generated
+    except Exception as e:
+        print(f"Fallback generation failed: {e}")
+        return f"A business website at {domain} offering products and services to customers."
 
 
 def fetch_website_text(url: str, fallback_text: Optional[str] = None) -> str:
-    """Backward compatibility wrapper."""
-    return WebScraper.scrape_website(url, fallback_text)
+    """
+    Fetch and extract text content from a website URL.
+    Falls back to fallback_text, then AI-generated fallback if scraping fails.
+    """
+    
+    print(f"\n=== Scraping {url} ===")
+    
+    # Set browser-like headers to avoid 403/bot detection
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+    }
+    
+    max_retries = 2
+    timeout = 8
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"Attempt {attempt + 1}/{max_retries}")
+            
+            response = requests.get(
+                url, 
+                headers=headers, 
+                timeout=timeout,
+                allow_redirects=True
+            )
+            
+            # Check status
+            if response.status_code != 200:
+                print(f"Status code: {response.status_code}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                else:
+                    raise Exception(f"HTTP {response.status_code}")
+            
+            # Check content type
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'text/html' not in content_type:
+                print(f"Non-HTML content type: {content_type}")
+                raise Exception(f"Content-Type is {content_type}, not HTML")
+            
+            # Parse HTML
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Remove script and style elements
+            for script in soup(["script", "style", "nav", "footer", "header"]):
+                script.decompose()
+            
+            # Extract text from key elements
+            text_parts = []
+            
+            # Title
+            title = soup.find('title')
+            if title:
+                text_parts.append(title.get_text().strip())
+            
+            # Meta description
+            meta_desc = soup.find('meta', attrs={'name': 'description'})
+            if meta_desc and meta_desc.get('content'):
+                text_parts.append(meta_desc.get('content').strip())
+            
+            # Headings
+            for tag in ['h1', 'h2', 'h3']:
+                for heading in soup.find_all(tag):
+                    text = heading.get_text().strip()
+                    if text and len(text) > 3:
+                        text_parts.append(text)
+            
+            # Paragraphs
+            for p in soup.find_all('p'):
+                text = p.get_text().strip()
+                if text and len(text) > 20:
+                    text_parts.append(text)
+            
+            # Combine and clean
+            full_text = ' '.join(text_parts)
+            full_text = ' '.join(full_text.split())
+            
+            # Limit length
+            if len(full_text) > 4000:
+                full_text = full_text[:4000] + "..."
+            
+            if len(full_text) < 50:
+                print(f"Extracted text too short ({len(full_text)} chars)")
+                raise Exception("Insufficient text extracted")
+            
+            print(f"✓ Successfully scraped {len(full_text)} characters")
+            print(f"Preview: {full_text[:150]}...")
+            return full_text
+            
+        except requests.exceptions.Timeout:
+            print(f"Timeout on attempt {attempt + 1}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                
+        except requests.exceptions.RequestException as e:
+            print(f"Request error: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                
+        except Exception as e:
+            print(f"Error: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+    
+    # All scraping attempts failed - use fallbacks
+    print("⚠️  Scraping failed, using fallback strategy")
+    
+    if fallback_text:
+        print(f"✓ Using user-provided fallback ({len(fallback_text)} chars)")
+        return fallback_text
+    else:
+        # Generate intelligent fallback using AI
+        print("🤖 No fallback provided, generating AI-based content...")
+        ai_fallback = generate_fallback_from_url(url)
+        return ai_fallback

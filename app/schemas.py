@@ -2,9 +2,12 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel
 
 
+from typing import List, Literal, Optional
+from pydantic import BaseModel
+
 class AnalyzeRequest(BaseModel):
     url: str
-    tonePreset: str
+    tonePreset: str = "auto"   # default to auto-detect
     fallbackText: Optional[str] = None
 
 
@@ -24,8 +27,8 @@ class GeneratedPost(BaseModel):
     hashtags: List[str]
     cta: str
     tone: str
-    engagement_score_label: Literal["Low", "Medium", "High"]
-
+    engagement_score_label: str
+    image_url: Optional[str] = None  # NEW FIELD FOR MARKETING IMAGES
 
 class AnalyzeResponse(BaseModel):
     brand_profile: BrandProfile
