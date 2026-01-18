@@ -1,81 +1,75 @@
-import logging
+import json
+import os
+from openai import OpenAI
 from app.schemas import BrandProfile
-from app.services.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-
-def generate_brand_profile(text: str, tone_preset: str) -> BrandProfile:
+def generate_brand_profile(website_text: str, tone_preset: str) -> BrandProfile:
     """
-    Extract structured brand profile from website text using LLM.
-
-    Args:
-        text: Website content text
-        tone_preset: Desired tone/brand voice
-
-    Returns:
-        Structured BrandProfile with brand information
-
-    Raises:
-        ValueError: If profile extraction fails
+    Generate a brand profile from website text using OpenAI.
     """
-    system_prompt = (
-        "You are a senior marketing strategist. "
-        "Given raw website text, extract a concise brand profile. "
-        "Return ONLY valid JSON with keys: "
-        "brand_name, description, products_services, target_audience, tone, keywords, colors. "
-        "Ensure all values are properly formatted and arrays are valid."
-    )
+    
+    system_prompt = """You are a marketing analyst expert.
+Extract a concise BRAND PROFILE from the given website text.
+Always infer as much as possible from context.
 
-    user_prompt = f"""
-Website text:
-{text[:3000]}
+Output ONLY valid JSON with exactly these keys:
+- brand_name: string (never use "Unknown Brand" - infer from text)
+- description: string (1-2 sentences describing what the brand does)
+- products_services: array of 3-8 short strings (specific offerings)
+- target_audience: array of 3-8 short strings (who they serve)
+- tone: short phrase describing communication style (e.g. "friendly and innovative", "professional and authoritative")
+- keywords: array of 5-15 short strings (relevant marketing keywords)
+- colors: array of 3-6 color names or hex codes if mentioned (e.g. "#123456" or "navy blue")
+
+Rules:
+- Do NOT return any extra keys, explanations, or comments
+- Never use placeholders like "Unknown Brand" or "not available"
+- If something is unclear, make a reasonable guess from the text
+- If colors aren't mentioned, suggest 2-3 colors that fit the brand type"""
+
+    user_prompt = f"""Website text:
+---
+{website_text[:3000]}
+---
 
 Tone preset: {tone_preset}
 
-Return JSON exactly like:
-{{
-  "brand_name": "Company Name",
-  "description": "Brief description of the brand",
-  "products_services": ["Product/Service 1", "Product/Service 2"],
-  "target_audience": ["Audience 1", "Audience 2"],
-  "tone": "professional",
-  "keywords": ["keyword1", "keyword2"],
-  "colors": ["#FF0000", "#00FF00"]
-}}
-"""
+Using ONLY the information above, extract and return the BRAND PROFILE as valid JSON."""
 
     try:
-        result = LLMClient.call_with_json_response(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
-            temperature=0.4,
-            max_tokens=1000,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            response_format={"type": "json_object"}
         )
-
-        # Validate and extract fields
-        brand_profile = BrandProfile(
-            brand_name=result.get("brand_name", "Unknown Brand"),
-            description=result.get("description", "Brand description not available."),
-            products_services=result.get("products_services", []) or [],
-            target_audience=result.get("target_audience", []) or [],
-            tone=result.get("tone", tone_preset),
-            keywords=result.get("keywords", []) or [],
-            colors=result.get("colors", []) or [],
-        )
-
-        return brand_profile
-
-    except Exception as e:
-        logger.error(f"Failed to generate brand profile: {str(e)}")
-        # Return fallback profile
+        
+        profile_json = json.loads(response.choices[0].message.content)
+        
         return BrandProfile(
-            brand_name="Unknown Brand",
-            description="Brand description not available.",
+            brand_name=profile_json.get("brand_name", "Brand"),
+            description=profile_json.get("description", "A leading brand in its industry."),
+            products_services=profile_json.get("products_services", []),
+            target_audience=profile_json.get("target_audience", []),
+            tone=profile_json.get("tone", tone_preset),
+            keywords=profile_json.get("keywords", []),
+            colors=profile_json.get("colors", [])
+        )
+        
+    except Exception as e:
+        print(f"Error generating brand profile: {e}")
+        # Minimal fallback only if API call completely fails
+        return BrandProfile(
+            brand_name="Brand",
+            description="A business offering quality products and services.",
             products_services=[],
             target_audience=[],
             tone=tone_preset,
             keywords=[],
-            colors=[],
+            colors=[]
         )
