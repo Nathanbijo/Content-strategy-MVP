@@ -3,12 +3,21 @@ import os
 from openai import OpenAI
 from app.schemas import BrandProfile
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Groq client (OpenAI-compatible)
+client = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
+)
 
 def generate_brand_profile(website_text: str, tone_preset: str) -> BrandProfile:
     """
-    Generate a brand profile from website text using OpenAI.
+    Generate a brand profile from website text using Groq.
     """
+    
+    print(f"=== generate_brand_profile called ===")
+    print(f"website_text length: {len(website_text)}")
+    print(f"website_text preview: {website_text[:200]}")
+    print(f"tone_preset: {tone_preset}")
     
     system_prompt = """You are a marketing analyst expert.
 Extract a concise BRAND PROFILE from the given website text.
@@ -39,8 +48,9 @@ Tone preset: {tone_preset}
 Using ONLY the information above, extract and return the BRAND PROFILE as valid JSON."""
 
     try:
+        print("Calling Groq API...")
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -49,7 +59,9 @@ Using ONLY the information above, extract and return the BRAND PROFILE as valid 
             response_format={"type": "json_object"}
         )
         
+        print("Groq response received")
         profile_json = json.loads(response.choices[0].message.content)
+        print(f"Parsed JSON: {profile_json}")
         
         return BrandProfile(
             brand_name=profile_json.get("brand_name", "Brand"),
@@ -62,8 +74,7 @@ Using ONLY the information above, extract and return the BRAND PROFILE as valid 
         )
         
     except Exception as e:
-        print(f"Error generating brand profile: {e}")
-        # Minimal fallback only if API call completely fails
+        print(f"!!! ERROR in generate_brand_profile: {type(e).__name__}: {e}")
         return BrandProfile(
             brand_name="Brand",
             description="A business offering quality products and services.",
