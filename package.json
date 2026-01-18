@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "ajv": "^6.12.6"
+  },
+  "dependencies": {
+    "ajv-keywords": "^3.5.2"
+  }
+}
